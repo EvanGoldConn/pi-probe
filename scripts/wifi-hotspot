@@ -1,0 +1,33 @@
+#!/bin/bash
+# Switches wlan0 from client mode to AP (hotspot) mode.
+# Stops wpa_supplicant and systemd-networkd client config,
+# assigns static IP, then starts hostapd and dnsmasq.
+# Logs to /tmp/wifi-hotspot.log for post-run debugging.
+
+LOG=/tmp/wifi-hotspot.log
+echo "[wifi-hotspot] Starting at $(date)" > $LOG
+
+echo "[wifi-hotspot] Stopping client mode services..." | tee -a $LOG
+sudo systemctl stop wpa_supplicant@wlan0.service
+sudo systemctl disable wpa_supplicant@wlan0.service
+
+echo "[wifi-hotspot] Bringing wlan0 down..." | tee -a $LOG
+sudo ip link set wlan0 down
+sudo ip addr flush dev wlan0
+
+echo "[wifi-hotspot] Assigning static IP 192.168.4.1..." | tee -a $LOG
+sudo ip addr add 192.168.4.1/24 dev wlan0
+sudo ip link set wlan0 up
+
+echo "[wifi-hotspot] Unmasking and starting hostapd..." | tee -a $LOG
+sudo systemctl unmask hostapd
+sudo systemctl start hostapd
+systemctl status hostapd --no-pager >> $LOG
+
+echo "[wifi-hotspot] Starting dnsmasq..." | tee -a $LOG
+sudo systemctl start dnsmasq
+systemctl status dnsmasq --no-pager >> $LOG
+
+ip addr show wlan0 >> $LOG
+echo "[wifi-hotspot] Done at $(date)" >> $LOG
+echo "[wifi-hotspot] Hotspot active. SSID: PiRecon, IP: 192.168.4.1"

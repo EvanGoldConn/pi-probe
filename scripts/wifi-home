@@ -1,0 +1,18 @@
+#!/bin/bash
+# Switches wlan0 to home network client mode.
+# Clears manual flag and hands control back to wlan0-manager.
+# Logs to /tmp/wifi-home.log
+
+LOG=/tmp/wifi-home.log
+MANUAL_FLAG=/tmp/wlan0-manual
+
+echo "[wifi-home] Starting at $(date)" > $LOG
+
+echo "[wifi-home] Clearing manual flag..." | tee -a $LOG
+rm -f $MANUAL_FLAG
+
+echo "[wifi-home] Restarting wlan0-manager..." | tee -a $LOG
+systemctl restart wlan0-manager.service
+
+echo "[wifi-home] wlan0-manager will connect to home WiFi or fall back to hotspot"
+echo "[wifi-home] Check /tmp/wlan0-manager.log for status"

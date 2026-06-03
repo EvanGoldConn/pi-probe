@@ -1,0 +1,13 @@
+[Unit]
+Description=wlan0 manager -- home WiFi with hotspot fallback
+After=systemd-networkd.service
+Wants=systemd-networkd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wlan0-manager
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

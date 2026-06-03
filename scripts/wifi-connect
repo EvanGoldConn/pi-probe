@@ -1,0 +1,87 @@
+#!/bin/bash
+# Connects wlan0 to an arbitrary network by SSID and PSK.
+# Detects current wlan0 state and prompts confirmation before switching.
+# Writes /tmp/wlan0-manual to signal wlan0-manager to not interfere.
+# Usage: wifi-connect <ssid> <psk>
+
+if [ -z "$1" ] || [ -z "$2" ]; then
+    echo "Usage: wifi-connect <ssid> <psk>"
+    exit 1
+fi
+
+SSID="$1"
+PSK="$2"
+MANUAL_FLAG=/tmp/wlan0-manual
+LOG=/tmp/wifi-connect.log
+
+echo "[wifi-connect] Starting at $(date)" > $LOG
+
+# Detect current state
+CURRENT_IP=$(ip addr show wlan0 2>/dev/null | grep "inet " | awk '{print $2}')
+if echo "$CURRENT_IP" | grep -q "192.168.4.1"; then
+    CURRENT_STATE="hotspot (PiRecon)"
+elif [ -n "$CURRENT_IP" ]; then
+    CURRENT_SSID=$(wpa_cli -i wlan0 status 2>/dev/null | grep "^ssid=" | cut -d= -f2)
+    CURRENT_STATE="WiFi ($CURRENT_SSID, $CURRENT_IP)"
+else
+    CURRENT_STATE="disconnected"
+fi
+
+echo "[wifi-connect] Current wlan0 state: $CURRENT_STATE"
+echo "[wifi-connect] Target network: $SSID"
+echo ""
+read -p "Disconnect from $CURRENT_STATE and connect to $SSID? [y/N] " CONFIRM
+if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
+    echo "[wifi-connect] Aborted."
+    exit 0
+fi
+
+echo "[wifi-connect] Stopping wlan0-manager interference..." | tee -a $LOG
+systemctl stop wpa_supplicant@wlan0.service 2>/dev/null
+systemctl stop hostapd 2>/dev/null
+systemctl stop dnsmasq 2>/dev/null
+ip link set wlan0 down
+ip addr flush dev wlan0
+rm -f /var/run/wpa_supplicant/wlan0 2>/dev/null
+sleep 2
+
+echo "[wifi-connect] Writing temp wpa_supplicant config for $SSID..." | tee -a $LOG
+sudo tee /etc/wpa_supplicant/wpa_supplicant-wlan0-temp.conf << WPAEOF > /dev/null
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+
+network={
+    ssid="$SSID"
+    psk="$PSK"
+}
+WPAEOF
+
+echo "[wifi-connect] Starting wpa_supplicant with temp config..." | tee -a $LOG
+ip link set wlan0 up
+wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant-wlan0-temp.conf
+
+echo "[wifi-connect] Waiting for association..." | tee -a $LOG
+for i in $(seq 1 30); do
+    STATE=$(wpa_cli -i wlan0 status 2>/dev/null | grep wpa_state | cut -d= -f2)
+    if [ "$STATE" = "COMPLETED" ]; then
+        echo "[wifi-connect] Associated after ${i}s" | tee -a $LOG
+        break
+    fi
+    sleep 1
+done
+
+echo "[wifi-connect] Waiting for DHCP..." | tee -a $LOG
+sleep 15
+IP=$(ip addr show wlan0 2>/dev/null | grep "inet " | awk '{print $2}')
+
+if [ -n "$IP" ]; then
+    echo "$SSID" > $MANUAL_FLAG
+    echo "[wifi-connect] Connected to $SSID -- wlan0 IP: $IP" | tee -a $LOG
+    echo "[wifi-connect] Manual flag set -- wlan0-manager will not interfere"
+    echo "[wifi-connect] Run 'sudo wifi-home' to return to normal auto behavior"
+else
+    echo "[wifi-connect] Failed -- no IP assigned" | tee -a $LOG
+    echo "[wifi-connect] Restoring wlan0-manager control..."
+    pkill -x wpa_supplicant 2>/dev/null
+    systemctl restart wlan0-manager.service
+fi
