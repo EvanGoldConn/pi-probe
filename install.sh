@@ -30,7 +30,7 @@ if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
 fi
 
 echo "[pi-probe] Installing dependencies..."
-apt update && apt install -y hostapd dnsmasq hcxdumptool hcxtools hashcat
+apt update && apt install -y hostapd dnsmasq hcxdumptool hcxtools hashcat ntpsec-ntpdate
 
 echo "[pi-probe] Disabling conflicting services..."
 systemctl stop hostapd dnsmasq wpa_supplicant wpa_supplicant@wlan0.service 2>/dev/null
@@ -66,10 +66,18 @@ sed \
     -e "s|PLACEHOLDER_HOTSPOT_IP|$HOTSPOT_IP|g" \
     "$REPO_DIR/config/dnsmasq.conf" > /etc/dnsmasq.conf
 
-echo "[pi-probe] Installing systemd service..."
+echo "[pi-probe] Installing systemd services..."
 cp "$REPO_DIR/systemd/wlan0-manager.service" /etc/systemd/system/
+cp "$REPO_DIR/systemd/force-timesync.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable wlan0-manager.service
+systemctl enable force-timesync.service
+
+echo "[pi-probe] Installing time sync helpers..."
+cp "$REPO_DIR/scripts/check-timesync.sh" /etc/profile.d/
+chmod +x /etc/profile.d/check-timesync.sh
+cp "$REPO_DIR/scripts/fix-time" /usr/local/bin/
+chmod +x /usr/local/bin/fix-time
 
 echo "[pi-probe] Setting up networkd..."
 cat > /etc/systemd/network/10-eth0.network << 'NETEOF'

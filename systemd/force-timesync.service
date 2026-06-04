@@ -1,0 +1,13 @@
+[Unit]
+Description=Force NTP time sync on boot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/timedatectl set-ntp true
+ExecStart=/usr/bin/timeout 10 /usr/sbin/ntpdate -u pool.ntp.org
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

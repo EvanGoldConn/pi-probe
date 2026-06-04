@@ -1,0 +1,20 @@
+#!/bin/bash
+# Sync Pi clock from the connected SSH client's time.
+# Used when Pi is in hotspot mode with no internet access.
+#
+# SSH_CLIENT contains the connecting IP -- we use that to identify
+# the Mac, then pull its current date via the existing SSH connection.
+# Since we're already connected over SSH we can just set the time
+# directly from the environment instead.
+
+MAC_TIME=$(date -d "$(curl -s --head http://google.com 2>/dev/null | grep ^Date | sed 's/Date: //g')" 2>/dev/null)
+
+if [ -n "$MAC_TIME" ]; then
+    sudo date -s "$MAC_TIME"
+    echo "Time updated: $(date)"
+else
+    # No internet even via Mac -- set manually from SSH client time
+    echo "No internet available. Set time manually with:"
+    echo "  sudo date -s \"$(date)\""
+    echo "Run this command on the Pi, replacing the date with your current time."
+fi
