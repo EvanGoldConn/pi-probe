@@ -1,6 +1,6 @@
 #!/bin/bash
 # Owns wlan0 completely.
-# On boot, immediately starts PiRecon hotspot -- no exceptions.
+# On boot, immediately starts NETGEAR_EXT_4786 hotspot -- no exceptions.
 # Use wifi-connect to join a local network manually once SSHed in.
 # If that connection fails or drops, watchdog returns to hotspot.
 # Logs to /tmp/wlan0-manager.log
@@ -41,7 +41,7 @@ start_hotspot() {
         sleep 3
         if systemctl is-active --quiet hostapd; then
             systemctl start dnsmasq
-            log "Hotspot active -- SSID: PiRecon, IP: 192.168.4.1"
+            log "Hotspot active -- SSID: NETGEAR_EXT_4786, IP: 192.168.4.1"
             return 0
         fi
         log "hostapd attempt $i failed -- retrying..."

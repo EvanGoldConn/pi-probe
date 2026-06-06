@@ -30,7 +30,7 @@ for i in 1 2 3 4 5; do
     sleep 3
     if systemctl is-active --quiet hostapd; then
         systemctl start dnsmasq
-        echo "[wifi-hotspot] Hotspot active -- SSID: PiRecon, IP: 192.168.4.1" | tee -a $LOG
+        echo "[wifi-hotspot] Hotspot active -- SSID: NETGEAR_EXT_4786, IP: 192.168.4.1" | tee -a $LOG
         exit 0
     fi
     echo "[wifi-hotspot] hostapd attempt $i failed -- retrying..." | tee -a $LOG

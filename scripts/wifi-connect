@@ -19,7 +19,7 @@ echo "[wifi-connect] Starting at $(date)" > $LOG
 # Detect current state
 CURRENT_IP=$(ip addr show wlan0 2>/dev/null | grep "inet " | awk '{print $2}')
 if echo "$CURRENT_IP" | grep -q "192.168.4.1"; then
-    CURRENT_STATE="hotspot (PiRecon)"
+    CURRENT_STATE="hotspot (NETGEAR_EXT_4786)"
 elif [ -n "$CURRENT_IP" ]; then
     CURRENT_SSID=$(wpa_cli -i wlan0 status 2>/dev/null | grep "^ssid=" | cut -d= -f2)
     CURRENT_STATE="WiFi ($CURRENT_SSID, $CURRENT_IP)"
