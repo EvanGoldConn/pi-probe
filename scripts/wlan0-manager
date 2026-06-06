@@ -1,10 +1,8 @@
 #!/bin/bash
 # Owns wlan0 completely.
-# On boot and on connectivity loss:
-#   1) Attempts to connect to home WiFi via wpa_supplicant + networkd
-#   2) If that fails, falls back to hotspot mode via hostapd + dnsmasq
-# Respects /tmp/wlan0-manual state file -- if present and connectivity is up,
-# does not interfere with manually established connections.
+# On boot, immediately starts PiRecon hotspot -- no exceptions.
+# Use wifi-connect to join a local network manually once SSHed in.
+# If that connection fails or drops, watchdog returns to hotspot.
 # Logs to /tmp/wlan0-manager.log
 
 LOG=/tmp/wlan0-manager.log
@@ -15,53 +13,19 @@ log() {
 }
 
 bring_wlan0_down() {
+    # Stop everything that could be touching wlan0
     systemctl stop wpa_supplicant@wlan0.service 2>/dev/null
     systemctl stop wpa_supplicant.service 2>/dev/null
     systemctl stop hostapd 2>/dev/null
     systemctl stop dnsmasq 2>/dev/null
     pkill -x wpa_supplicant 2>/dev/null
+    pkill -x dhcpcd 2>/dev/null
+    # Stop networkd DHCP on wlan0 -- it will reassign IPs if left running
+    networkctl down wlan0 2>/dev/null
     ip link set wlan0 down
     ip addr flush dev wlan0
     rm -f /var/run/wpa_supplicant/wlan0 2>/dev/null
     sleep 2
-}
-
-wait_for_association() {
-    for i in $(seq 1 30); do
-        STATE=$(wpa_cli -i wlan0 status 2>/dev/null | grep wpa_state | cut -d= -f2)
-        if [ "$STATE" = "COMPLETED" ]; then
-            log "Associated with AP after ${i}s"
-            return 0
-        fi
-        sleep 1
-    done
-    log "Association timed out after 30s"
-    return 1
-}
-
-try_home() {
-    log "Attempting home WiFi connection..."
-    bring_wlan0_down
-    ip link set wlan0 up
-    systemctl start wpa_supplicant@wlan0.service
-
-    if ! wait_for_association; then
-        log "Home WiFi failed -- could not associate"
-        systemctl stop wpa_supplicant@wlan0.service
-        return 1
-    fi
-
-    log "Associated -- waiting for DHCP..."
-    sleep 15
-    IP=$(ip addr show wlan0 2>/dev/null | grep "inet " | awk '{print $2}')
-    if [ -n "$IP" ]; then
-        log "Home WiFi connected -- wlan0 IP: $IP"
-        return 0
-    else
-        log "Home WiFi failed -- no IP assigned after association"
-        systemctl stop wpa_supplicant@wlan0.service
-        return 1
-    fi
 }
 
 start_hotspot() {
@@ -69,10 +33,22 @@ start_hotspot() {
     bring_wlan0_down
     ip addr add 192.168.4.1/24 dev wlan0
     ip link set wlan0 up
+
+    # Retry hostapd up to 5 times -- wlan0 may not be ready immediately
     systemctl unmask hostapd 2>/dev/null
-    systemctl start hostapd
-    systemctl start dnsmasq
-    log "Hotspot active -- SSID: PiRecon, IP: 192.168.4.1"
+    for i in 1 2 3 4 5; do
+        systemctl start hostapd
+        sleep 3
+        if systemctl is-active --quiet hostapd; then
+            systemctl start dnsmasq
+            log "Hotspot active -- SSID: PiRecon, IP: 192.168.4.1"
+            return 0
+        fi
+        log "hostapd attempt $i failed -- retrying..."
+        systemctl stop hostapd 2>/dev/null
+        sleep 2
+    done
+    log "ERROR: hostapd failed to start after 5 attempts"
 }
 
 check_connectivity() {
@@ -80,50 +56,43 @@ check_connectivity() {
     if [ -z "$IP" ]; then
         return 1
     fi
+    # Hotspot mode is always considered connected
     if echo "$IP" | grep -q "192.168.4.1"; then
         return 0
     fi
-    ping -c 2 -W 3 192.168.1.1 -I wlan0 > /dev/null 2>&1
+    # wifi-connect session -- ping the actual assigned gateway
+    GATEWAY=$(ip route show dev wlan0 2>/dev/null | grep default | awk '{print $3}')
+    if [ -z "$GATEWAY" ]; then
+        return 1
+    fi
+    ping -c 2 -W 3 "$GATEWAY" -I wlan0 > /dev/null 2>&1
     return $?
 }
 
-# Boot delay -- wait for hardware and networkd to fully initialize
-log "Started at $(date) -- waiting 20s for system init..."
-sleep 20
+# Boot delay
+log "Started at $(date) -- waiting 10s for system init..."
+sleep 10
 
-echo "[wlan0-manager] Started at $(date)" >> $LOG
+log "Boot: starting hotspot immediately"
+start_hotspot
 
-if try_home; then
-    log "Boot: home WiFi successful"
-else
-    log "Boot: home WiFi failed, starting hotspot"
-    start_hotspot
-fi
-
-# Connectivity watchdog loop
+# Watchdog loop
 while true; do
     sleep 30
 
     if check_connectivity; then
-        # Connectivity is up -- if manual flag is set, leave it alone
         if [ -f "$MANUAL_FLAG" ]; then
             log "Manual connection active ($(cat $MANUAL_FLAG)) -- not interfering"
         fi
         continue
     fi
 
-    # Connectivity is down -- clear manual flag and recover
     if [ -f "$MANUAL_FLAG" ]; then
-        log "Manual connection lost -- clearing manual flag and recovering..."
+        log "Manual connection lost -- returning to hotspot"
         rm -f "$MANUAL_FLAG"
     else
-        log "Connectivity lost at $(date) -- reconnecting..."
+        log "Connectivity lost -- returning to hotspot"
     fi
 
-    if try_home; then
-        log "Reconnected to home WiFi"
-    else
-        log "Home WiFi unavailable -- falling back to hotspot"
-        start_hotspot
-    fi
+    start_hotspot
 done

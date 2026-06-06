@@ -1,11 +1,11 @@
 #!/bin/bash
-# Connects wlan0 to an arbitrary network by SSID and PSK.
-# Detects current wlan0 state and prompts confirmation before switching.
-# Writes /tmp/wlan0-manual to signal wlan0-manager to not interfere.
-# Usage: wifi-connect <ssid> <psk>
+# Connects wlan0 to a network by SSID and PSK for the current session only.
+# Credentials are never saved -- reboot returns to hotspot.
+# On failure, automatically returns to hotspot mode.
+# Usage: sudo wifi-connect "SSID" "PSK"
 
 if [ -z "$1" ] || [ -z "$2" ]; then
-    echo "Usage: wifi-connect <ssid> <psk>"
+    echo "Usage: sudo wifi-connect \"SSID\" \"PSK\""
     exit 1
 fi
 
@@ -27,8 +27,8 @@ else
     CURRENT_STATE="disconnected"
 fi
 
-echo "[wifi-connect] Current wlan0 state: $CURRENT_STATE"
-echo "[wifi-connect] Target network: $SSID"
+echo "[wifi-connect] Current state: $CURRENT_STATE"
+echo "[wifi-connect] Target: $SSID"
 echo ""
 read -p "Disconnect from $CURRENT_STATE and connect to $SSID? [y/N] " CONFIRM
 if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
@@ -36,17 +36,20 @@ if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
     exit 0
 fi
 
-echo "[wifi-connect] Stopping wlan0-manager interference..." | tee -a $LOG
+echo "[wifi-connect] Tearing down wlan0..." | tee -a $LOG
 systemctl stop wpa_supplicant@wlan0.service 2>/dev/null
 systemctl stop hostapd 2>/dev/null
 systemctl stop dnsmasq 2>/dev/null
+pkill -x wpa_supplicant 2>/dev/null
+pkill -x dhcpcd 2>/dev/null
+networkctl down wlan0 2>/dev/null
 ip link set wlan0 down
 ip addr flush dev wlan0
 rm -f /var/run/wpa_supplicant/wlan0 2>/dev/null
 sleep 2
 
-echo "[wifi-connect] Writing temp wpa_supplicant config for $SSID..." | tee -a $LOG
-sudo tee /etc/wpa_supplicant/wpa_supplicant-wlan0-temp.conf << WPAEOF > /dev/null
+echo "[wifi-connect] Writing temp config for $SSID..." | tee -a $LOG
+tee /tmp/wpa-temp.conf << WPAEOF > /dev/null
 ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 update_config=1
 
@@ -56,32 +59,47 @@ network={
 }
 WPAEOF
 
-echo "[wifi-connect] Starting wpa_supplicant with temp config..." | tee -a $LOG
+echo "[wifi-connect] Starting wpa_supplicant..." | tee -a $LOG
 ip link set wlan0 up
-wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant-wlan0-temp.conf
+wpa_supplicant -B -i wlan0 -c /tmp/wpa-temp.conf
 
 echo "[wifi-connect] Waiting for association..." | tee -a $LOG
+ASSOCIATED=0
 for i in $(seq 1 30); do
     STATE=$(wpa_cli -i wlan0 status 2>/dev/null | grep wpa_state | cut -d= -f2)
     if [ "$STATE" = "COMPLETED" ]; then
         echo "[wifi-connect] Associated after ${i}s" | tee -a $LOG
+        ASSOCIATED=1
         break
     fi
     sleep 1
 done
 
-echo "[wifi-connect] Waiting for DHCP..." | tee -a $LOG
-sleep 15
-IP=$(ip addr show wlan0 2>/dev/null | grep "inet " | awk '{print $2}')
+if [ "$ASSOCIATED" = "0" ]; then
+    echo "[wifi-connect] Failed -- could not associate" | tee -a $LOG
+    echo "[wifi-connect] Returning to hotspot..."
+    pkill -x wpa_supplicant 2>/dev/null
+    rm -f /tmp/wpa-temp.conf
+    systemctl restart wlan0-manager.service
+    exit 1
+fi
+
+echo "[wifi-connect] Requesting DHCP..." | tee -a $LOG
+dhcpcd wlan0 &
+sleep 10
+IP=$(ip addr show wlan0 2>/dev/null | grep "inet " | grep -v "192.168.4" | awk '{print $2}' | head -1)
 
 if [ -n "$IP" ]; then
     echo "$SSID" > $MANUAL_FLAG
-    echo "[wifi-connect] Connected to $SSID -- wlan0 IP: $IP" | tee -a $LOG
-    echo "[wifi-connect] Manual flag set -- wlan0-manager will not interfere"
-    echo "[wifi-connect] Run 'sudo wifi-home' to return to normal auto behavior"
+    echo "[wifi-connect] Connected -- wlan0 IP: $IP" | tee -a $LOG
+    echo "[wifi-connect] Connected to $SSID at $IP"
+    echo "[wifi-connect] Watchdog will return to hotspot if connection drops"
 else
     echo "[wifi-connect] Failed -- no IP assigned" | tee -a $LOG
-    echo "[wifi-connect] Restoring wlan0-manager control..."
+    echo "[wifi-connect] Returning to hotspot..."
     pkill -x wpa_supplicant 2>/dev/null
+    pkill -x dhcpcd 2>/dev/null
+    rm -f /tmp/wpa-temp.conf
     systemctl restart wlan0-manager.service
+    exit 1
 fi
