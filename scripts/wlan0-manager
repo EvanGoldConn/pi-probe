@@ -31,6 +31,16 @@ bring_wlan0_down() {
 start_hotspot() {
     log "Starting hotspot mode..."
     bring_wlan0_down
+
+    # Wait for wlan0 to be ready -- Alfa adapter initialization can
+    # briefly interfere with the wireless subsystem on boot
+    for i in 1 2 3 4 5; do
+        if ip link show wlan0 | grep -q "state UP\|state DOWN"; then
+            break
+        fi
+        sleep 2
+    done
+
     ip addr add 192.168.4.1/24 dev wlan0
     ip link set wlan0 up
 
@@ -69,9 +79,10 @@ check_connectivity() {
     return $?
 }
 
-# Boot delay
-log "Started at $(date) -- waiting 10s for system init..."
-sleep 10
+# Boot delay -- 20s to allow Alfa adapter and wireless subsystem to
+# fully initialize before we attempt to start hostapd
+log "Started at $(date) -- waiting 20s for system init..."
+sleep 20
 
 log "Boot: starting hotspot immediately"
 start_hotspot
